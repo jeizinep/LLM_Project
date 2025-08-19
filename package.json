@@ -1,0 +1,30 @@
+{
+  "name": "bun-react-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.tsx",
+    "start": "NODE_ENV=production bun src/index.tsx",
+    "build": "bun run build.ts"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^7.3.1",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "bun-plugin-tailwind": "^0.0.15",
+    "dotenv": "^17.2.1",
+    "react": "^19",
+    "react-dom": "^19",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^15.6.1",
+    "rehype-sanitize": "^6.0.0",
+    "tailwindcss": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/bun": "latest"
+  }
+}
