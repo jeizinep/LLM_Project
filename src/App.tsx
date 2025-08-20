@@ -128,6 +128,11 @@ export function App() {
     const fetchFlows = async () => {
       try {
         const response = await fetch("http://localhost:3001/api/flows");
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const data = await response.json();
 
         if (Array.isArray(data)) {
@@ -135,11 +140,13 @@ export function App() {
           setFlows(filteredFlows);
           setError("");
         } else {
-          setError("Failed to fetch flows. Please check the API endpoint.");
+          const errorMsg = `Invalid response format from flows API. Expected array, got ${typeof data}`;
+          setError(errorMsg);
           setFlows([]);
         }
       } catch (error) {
-        setError("Failed to fetch flows. Please check your network connection.");
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        setError(`Failed to fetch flows from http://localhost:3001/api/flows: ${errorMsg}`);
         setFlows([]);
       }
     };
@@ -224,206 +231,63 @@ export function App() {
     const chatEndpoint = `http://localhost:3001/api/chat`;
     console.log("Using chat endpoint:", chatEndpoint);
 
-      try {
-        console.log("Sending message to chat endpoint with streaming:", {
-          message: input,
-          flow_id: selectedFlow,
-          stream: true
-        });
+    try {
+      console.log("Sending message to chat endpoint with streaming:", {
+        message: input,
+        flow_id: selectedFlow,
+        stream: true
+      });
 
-        // Let's use a simpler approach - first try with no streaming
-        try {
-          // First attempt: Get a full response without streaming
-          console.log("Attempting non-streaming request first");        const response = await fetch(chatEndpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: input,
-            flow_id: selectedFlow,
-            stream: false // Explicitly disable streaming
-          }),
-          signal: AbortSignal.timeout(10000) // 10 second timeout for faster fallback to streaming
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Server returned ${response.status} ${response.statusText}`);
-        }
-        
-        // Process the response
-        const data = await response.json();
-        console.log("Received non-streaming response:", data);
-        
-        // Extract the response and update the message
-        if (data.outputs && Array.isArray(data.outputs) && data.outputs.length > 0) {
-          const output = data.outputs[0];
-          let responseText = "";
-          
-          // Handle Langflow nested response format
-          if (output.results && output.results.message && output.results.message.data && output.results.message.data.text) {
-            responseText = output.results.message.data.text;
-          } 
-          // Try various other formats
-          else if (output.text) {
-            responseText = output.text;
-          }
-          else if (output.value) {
-            responseText = output.value;
-          }
-          else if (output.message) {
-            responseText = output.message;
-          }
-          // Special case for artifacts.message format
-          else if (output.artifacts && output.artifacts.message) {
-            responseText = typeof output.artifacts.message === 'string' 
-              ? output.artifacts.message 
-              : JSON.stringify(output.artifacts.message);
-          }
-          // If still no text found, use the whole output
-          else {
-            responseText = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
-          }
-          
-          updateBotMessage(responseText);
-        } else if (data.event === "add_message" && data.data && data.data.text) {
-          // Handle the Langflow message format
-          updateBotMessage(data.data.text);
-        } else {
-          // If we can't extract text in a standard way, try to parse the response
-          let responseText = "";
-          
-          if (typeof data === "string") {
-            responseText = data;
-          } else if (data.text) {
-            responseText = data.text;
-          } else if (data.content) {
-            responseText = data.content;
-          } else if (data.message) {
-            responseText = data.message;
-          } else {
-            // Fallback: show the raw response as JSON
-            responseText = "```json\n" + JSON.stringify(data, null, 2) + "\n```";
-          }
-          
-          updateBotMessage(responseText);
-        }
-      } catch (error) {
-        console.error("Error with non-streaming request:", error);
-        
-        // Add a "thinking" effect with dots to simulate streaming for user experience
-        const thinkingDots = [".", "..", "..."];
-        let dotIndex = 0;
-        
-        // Start the thinking animation
-        const thinkingInterval = setInterval(() => {
-          updateBotMessage(`*Thinking${thinkingDots[dotIndex]}*`);
-          dotIndex = (dotIndex + 1) % thinkingDots.length;
-        }, 500);
-        
-        try {
-          // Second attempt: Use EventSource for proper SSE handling
-          console.log("Falling back to streaming request");
-          
-          // Stop the thinking animation
-          clearInterval(thinkingInterval);
-          
-          console.log("Using EventSource for streaming");
-          
-          // Create an EventSource connection
-          const eventSource = new EventSource(
-            `${chatEndpoint}?message=${encodeURIComponent(input)}&flow_id=${selectedFlow}&stream=true`
-          );
-          
-          let hasReceivedContent = false;
-          
-          let accumulatedText = '';
-          
-          eventSource.onmessage = (event) => {
-            console.log("Streaming response received:", event.data.substring(0, 100) + (event.data.length > 100 ? "..." : ""));
-            
-            try {
-              // Check for the end signal
-              if (event.data === "[DONE]") {
-                console.log("Stream complete");
-                eventSource.close();
-                return;
-              }
-              
-              const result = processSseResponse(event.data);
-              if (result) {
-                // Accumulate the text and show incremental updates for real-time streaming effect
-                accumulatedText += result;
-                updateBotMessage(accumulatedText);
-                hasReceivedContent = true;
-              }
-            } catch (err) {
-              console.error("Error parsing streaming response:", err);
-            }
-          };
-          
-          eventSource.onerror = (err) => {
-            console.error("EventSource error:", err);
-            eventSource.close();
-            
-            if (!hasReceivedContent) {
-              updateBotMessage("Error receiving streaming response. Please try again.");
-            }
-          };
-          
-          // Handle the stream end manually
-          setTimeout(() => {
-            if (!hasReceivedContent) {
-              console.log("No content received from SSE, checking for text in buffer");
-              
-              // Try to extract text from the raw response using a manual fetch
-              fetch(`${chatEndpoint}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  message: input,
-                  flow_id: selectedFlow,
-                  stream: false
-                })
-              })
-              .then(res => res.json())
-              .then(data => {
-                // Try to extract the text content
-                const extractedText = extractTextFromResponse(data);
-                if (extractedText) {
-                  console.log("Found text in fallback response:", extractedText.substring(0, 50) + "...");
-                  updateBotMessage(extractedText);
-                } else {
-                  updateBotMessage("Received a response but couldn't extract any text content.");
-                }
-                eventSource.close();
-              })
-              .catch(err => {
-                console.error("Error with fallback request:", err);
-                eventSource.close();
-              });
-            } else {
-              eventSource.close();
-            }
-          }, 15000); // 15 second fallback
-        } catch (streamErr) {
-          console.error("Error with alternative request method:", streamErr);
-          
-          // Stop the thinking animation
-          clearInterval(thinkingInterval);
-          
-          // Display an appropriate error message
-          const errMessage = streamErr instanceof Error ? streamErr.message : String(streamErr);
-          updateBotMessage(`*Sorry, I couldn't generate a response. Please try again later.*\n\nError: ${errMessage}`);
-        }
-      }
+      // Use EventSource for proper SSE handling
+      console.log("Using EventSource for streaming");
       
-      // Set streaming to false when we're done
-      setIsStreaming(false);
+      // Create an EventSource connection
+      const eventSource = new EventSource(
+        `${chatEndpoint}?message=${encodeURIComponent(input)}&flow_id=${selectedFlow}&stream=true`
+      );
+      
+      let accumulatedText = '';
+      
+      eventSource.onmessage = (event) => {
+        console.log("Streaming response received:", event.data.substring(0, 100) + (event.data.length > 100 ? "..." : ""));
+        
+        try {
+          // Check for the end signal
+          if (event.data === "[DONE]") {
+            console.log("Stream complete");
+            eventSource.close();
+            return;
+          }
+          
+          const result = processSseResponse(event.data);
+          if (result) {
+            // Accumulate the text and show incremental updates for real-time streaming effect
+            accumulatedText += result;
+            updateBotMessage(accumulatedText);
+          }
+        } catch (err) {
+          console.error("Error parsing streaming response:", err);
+        }
+      };
+      
+      eventSource.onerror = (err) => {
+        console.error("EventSource error:", err);
+        eventSource.close();
+        
+        // Show the actual error instead of a generic message
+        updateBotMessage(`Error connecting to chat service. Please check that the Langflow server is running and try again.`);
+      };
     } catch (error) {
-      console.error("Error sending message:", error);
-      // Remove the empty placeholder message on error
-      setMessages(prev => prev.slice(0, -1));
+      console.error("Error with streaming request:", error);
+      
+      // Display the actual error message
+      const errMessage = error instanceof Error ? error.message : String(error);
+      updateBotMessage(`Error connecting to chat service: ${errMessage}\n\nPlease check that the Langflow server is running and try again.`);
+      
+      // Set streaming to false and clean up
+      setIsStreaming(false);
+    } finally {
+      // Ensure streaming state is always reset
       setIsStreaming(false);
     }
   };
