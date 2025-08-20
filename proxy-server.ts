@@ -107,6 +107,45 @@ async function main() {
             });
           } catch (error) {
             console.error("Error fetching flows:", error);
+            
+            // Check if this is a connection error (Langflow not running)
+            const isConnectionError = String(error).includes("ConnectionRefused") || 
+                                    String(error).includes("Unable to connect");
+            
+            if (isConnectionError) {
+              console.log("Langflow server not available, returning mock flows for development");
+              
+              // Return mock flows for development when Langflow is not running
+              const mockFlows = [
+                {
+                  id: "mock-flow-1",
+                  name: "Development Chat Flow",
+                  user_id: "dev-user",
+                  description: "Mock flow for development when Langflow is not running",
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                },
+                {
+                  id: "mock-flow-2", 
+                  name: "Test Assistant Flow",
+                  user_id: "dev-user",
+                  description: "Another mock flow for testing",
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                }
+              ];
+              
+              return new Response(JSON.stringify(mockFlows), { 
+                status: 200, 
+                headers: { 
+                  "Content-Type": "application/json", 
+                  "X-Mock-Data": "true",
+                  ...corsHeaders(origin) 
+                } 
+              });
+            }
+            
+            // For other types of errors, return the original error response
             return new Response(JSON.stringify({ 
               error: "Network error when fetching flows",
               details: String(error),
@@ -401,10 +440,39 @@ async function main() {
                   }
                 } catch (fetchError) {
                   console.error("Fetch error:", fetchError);
-                  await sendSSE({ 
-                    event: "error", 
-                    error: `Fetch error: ${String(fetchError)}`
-                  });
+                  
+                  // Check if this is a connection error (Langflow not running)
+                  const isConnectionError = String(fetchError).includes("ConnectionRefused") || 
+                                          String(fetchError).includes("Unable to connect");
+                  
+                  if (isConnectionError) {
+                    console.log("Langflow server not available, providing mock streaming response");
+                    
+                    // Send a mock streaming response
+                    const mockResponseText = `This is a mock streaming response to your message: "${message}". The Langflow server is not running, but this demonstrates that the streaming functionality is working correctly. When you connect to a real Langflow instance, you'll see actual AI responses streamed here in real-time.`;
+                    
+                    // Simulate streaming by sending the text in chunks
+                    const words = mockResponseText.split(' ');
+                    for (let i = 0; i < words.length; i += 3) {
+                      const chunk = words.slice(i, i + 3).join(' ');
+                      await sendSSE({ 
+                        text: chunk + (i + 3 < words.length ? ' ' : ''),
+                        event: 'message' 
+                      });
+                      // Small delay to simulate real streaming
+                      await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    // Send completion marker
+                    await sendSSE("[DONE]");
+                  } else {
+                    // For other types of errors, send error message
+                    await sendSSE({ 
+                      event: "error", 
+                      error: `Fetch error: ${String(fetchError)}`
+                    });
+                  }
+                  
                   writer.close().catch(err => {
                     console.error("Error closing stream writer:", err);
                   });
@@ -433,47 +501,90 @@ async function main() {
             }
           } else {
             // Non-streaming request (original implementation)
-            const res = await fetch(`${LANGFLOW_BASE}/api/v1/run/${flow_id}`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify({ 
-                input_value: message,
-                input_type: "chat",
-                output_type: "chat"
-              }),
-            });
-            
-            console.log(`Chat response status: ${res.status} ${res.statusText}`);
-            const text = await res.text();
-            console.log(`Chat response body:`, text.substring(0, 500) + (text.length > 500 ? '...' : ''));
-            
-            // Try to parse the response as JSON to ensure it's properly formatted
-            let responseBody = text;
             try {
-              const jsonData = JSON.parse(text);
+              const res = await fetch(`${LANGFLOW_BASE}/api/v1/run/${flow_id}`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ 
+                  input_value: message,
+                  input_type: "chat",
+                  output_type: "chat"
+                }),
+              });
               
-              // Ensure the output is consistently formatted
-              if (jsonData && !jsonData.error) {
-                // Format is already good, send it as is
-                responseBody = JSON.stringify(jsonData);
+              console.log(`Chat response status: ${res.status} ${res.statusText}`);
+              const text = await res.text();
+              console.log(`Chat response body:`, text.substring(0, 500) + (text.length > 500 ? '...' : ''));
+              
+              // Try to parse the response as JSON to ensure it's properly formatted
+              let responseBody = text;
+              try {
+                const jsonData = JSON.parse(text);
+                
+                // Ensure the output is consistently formatted
+                if (jsonData && !jsonData.error) {
+                  // Format is already good, send it as is
+                  responseBody = JSON.stringify(jsonData);
+                }
+              } catch (e) {
+                console.log("Response is not valid JSON, sending as text");
+                // If it's not valid JSON, wrap it in a simple structure
+                responseBody = JSON.stringify({
+                  outputs: [{
+                    text: text
+                  }]
+                });
               }
-            } catch (e) {
-              console.log("Response is not valid JSON, sending as text");
-              // If it's not valid JSON, wrap it in a simple structure
-              responseBody = JSON.stringify({
-                outputs: [{
-                  text: text
-                }]
+              
+              return new Response(responseBody, { 
+                status: res.status, 
+                headers: { 
+                  "Content-Type": "application/json", 
+                  ...corsHeaders(origin) 
+                } 
+              });
+            } catch (chatError) {
+              console.error("Error in chat request:", chatError);
+              
+              // Check if this is a connection error (Langflow not running)
+              const isConnectionError = String(chatError).includes("ConnectionRefused") || 
+                                      String(chatError).includes("Unable to connect");
+              
+              if (isConnectionError) {
+                console.log("Langflow server not available, returning mock chat response");
+                
+                // Return a mock chat response
+                const mockResponse = {
+                  outputs: [{
+                    results: {
+                      message: {
+                        data: {
+                          text: `This is a mock response to your message: "${message}". The Langflow server is not running, but this demonstrates that the frontend is working correctly. When you connect to a real Langflow instance, you'll see actual AI responses here.`
+                        }
+                      }
+                    }
+                  }]
+                };
+                
+                return new Response(JSON.stringify(mockResponse), { 
+                  status: 200, 
+                  headers: { 
+                    "Content-Type": "application/json", 
+                    "X-Mock-Data": "true",
+                    ...corsHeaders(origin) 
+                  } 
+                });
+              }
+              
+              // For other types of errors, return an error response
+              return new Response(JSON.stringify({ 
+                error: "Chat request failed",
+                details: String(chatError)
+              }), { 
+                status: 500, 
+                headers: { "Content-Type": "application/json", ...corsHeaders(origin) } 
               });
             }
-            
-            return new Response(responseBody, { 
-              status: res.status, 
-              headers: { 
-                "Content-Type": "application/json", 
-                ...corsHeaders(origin) 
-              } 
-            });
           }
         }
 
